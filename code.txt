@@ -1,0 +1,95 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+import pickle
+# Load data
+parking = pd.read_csv('Annual_Parking_Study_Data.csv', low_memory=False)
+parking.fillna(0, inplace=True)  # Fills all NaNs with 0
+# Rename main dataframe columns
+parking = parking.rename(columns={
+    'Study_Area': 'location',
+    'Parking_Spaces': 'total_slots',
+    'Dp_Count': 'available_slots',
+    'Total_Vehicle_Count': 'demand_level',
+    'Unitdesc': 'duration_of_parking',
+    'Rpz_Count': 'base_price'
+})
+# Fix the timestamp column if it's still named 'Date Time' or 'Time Stamp'
+if 'Date Time' in parking.columns:
+    parking.rename(columns={'Date Time': 'timestamp'}, inplace=True)
+elif 'Time Stamp' in parking.columns:
+    parking.rename(columns={'Time Stamp': 'timestamp'}, inplace=True)
+# Extract hour and day from timestamp
+parking['timestamp'] = pd.to_datetime(parking['timestamp'], errors='coerce')
+parking['hour'] = parking['timestamp'].dt.hour
+parking['day'] = parking['timestamp'].dt.day
+# Keep only the columns we care about
+required_columns = [
+    'timestamp', 'day', 'hour',
+    'location', 'total_slots', 'available_slots',
+    'demand_level', 'duration_of_parking', 'base_price'
+]
+# Ensure columns are of correct type
+parking['location'] = parking['location'].astype(str)
+parking['duration_of_parking'] = parking['duration_of_parking'].astype(str)
+# Filter the DataFrame
+parking = parking[required_columns]
+# Create a dynamic price target variable instead of a constant
+# For example, let's create a synthetic price based on demand and available slots
+# This is just an example - in a real scenario, you'd use actual price data
+parking['price'] = (
+    1.5 + 
+    (parking['demand_level'] / (parking['total_slots'] + 1)) * 2 +  # Higher demand = higher price
+    np.sin(parking['hour'] / 24 * 2 * np.pi) * 0.5 +  # Time of day effect
+    np.random.normal(0, 0.25, size=len(parking))  # Small random noise
+)
+# Ensure price is never negative
+parking['price'] = parking['price'].clip(lower=1.0)
+# Drop rows with any remaining NaNs
+parking.dropna(inplace=True)
+# Store original categorical values before encoding
+original_location = parking['location'].copy()
+original_duration = parking['duration_of_parking'].copy()
+# Create and fit label encoders
+label_encoders = {}
+categorical_cols = ['location', 'duration_of_parking']
+for col in categorical_cols:
+    le = LabelEncoder()
+    parking[col] = le.fit_transform(parking[col])
+    label_encoders[col] = le
+# Define features and target
+X = parking[['day', 'hour', 'location', 'total_slots', 'available_slots', 'demand_level', 'duration_of_parking']]
+y = parking['price']
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# Train the model (only once)
+model = RandomForestRegressor(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+# Predict on test data
+y_pred = model.predict(X_test)
+# Calculate evaluation metrics
+mae = mean_absolute_error(y_test, y_pred)
+mse = mean_squared_error(y_test, y_pred)
+rmse = np.sqrt(mse)
+r2 = r2_score(y_test, y_pred)
+# Print metrics
+print(f"MAE: {mae:.2f}")
+print(f"MSE: {mse:.2f}")
+print(f"RMSE: {rmse:.2f}")
+print(f"R² Score: {r2:.2f}")
+# Feature importan ce
+feature_importance = model.feature_importances_
+features = X.columns
+importance_df = pd.DataFrame({'Feature': features, 'Importance': feature_importance})
+print("\nFeature Importance:")
+print(importance_df.sort_values('Importance', ascending=False))
+# Save the label encoders properly
+with open("label_encoders.pkl", "wb") as f:
+    pickle.dump(label_encoders, f)
+# Save the trained model
+with open("parking_price_model.pkl", "wb") as f:
+    pickle.dump(model, f)
+print("\nModel and encoders saved successfully!")
